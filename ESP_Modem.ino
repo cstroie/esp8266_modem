@@ -120,6 +120,9 @@ bool cmdMode = true;       // Are we in AT command mode or connected mode
 bool callConnected = false;// Are we currently in a call
 bool telnet = false;       // Is telnet control code handling enabled
 bool verboseResults = false;
+const char termType[] = "VT52";
+const uint16_t termWidth  = 80;
+const uint16_t termHeight = 8;
 //#define DEBUG 1          // Print additional debug information to serial channel
 #undef DEBUG
 #define LISTEN_PORT 6400   // Listen to this if not connected. Set to zero to disable.
@@ -156,10 +159,62 @@ enum pinPolarity_t { P_INVERTED, P_NORMAL }; // Is LOW (0) or HIGH (1) active?
 byte pinPolarity = P_INVERTED;
 
 // Telnet codes
-#define DO 0xfd
-#define WONT 0xfc
-#define WILL 0xfb
-#define DONT 0xfe
+/** TELNET CODE: echo */
+#define TELNET_ECHO 1
+/** TELNET CODE: echo */
+#define TELNET_LOGOUT 18
+/** TELNET CODE: supress go ahead*/
+#define TELNET_SUPRESS_GO_AHEAD 3
+/** TELNET CODE: sending terminal type*/
+#define TELNET_TERMTYPE 24
+/** TELNET CODE: Negotiate About Window Size.*/
+#define TELNET_NAWS 31
+/** TELNET CODE: Remote Flow Control.*/
+#define TELNET_TOGGLE_FLOW_CONTROL 33
+/** TELNET CODE: Linemode*/
+#define TELNET_LINEMODE 34
+/** TELNET CODE: MSDP protocol*/
+#define TELNET_MSDP 69
+/** TELNET CODE: MSSP Server Status protocol*/
+#define TELNET_MSSP 70
+/** TELNET CODE: text compression, protocol 1*/
+#define TELNET_COMPRESS 85
+/** TELNET CODE: text compression, protocol 2*/
+#define TELNET_COMPRESS2 86
+/** TELNET CODE: MSP SOund protocol*/
+#define TELNET_MSP 90
+/** TELNET CODE: MXP Extended protocol*/
+#define TELNET_MXP 91
+/** TELNET CODE: AARD protocol*/
+#define TELNET_AARD 102
+/** TELNET CODE: End of subnegotiation parameters*/
+#define TELNET_SE 240
+/** TELNET CODE: Are You There*/
+#define TELNET_AYT 246
+/** TELNET CODE: Erase character*/
+#define TELNET_EC 247
+/** TELNET CODE: ATCP protocol*/
+#define TELNET_ATCP 200
+/** TELNET CODE: GMCP protocol*/
+#define TELNET_GMCP 201
+/** TELNET CODE: Indicates that what follows is subnegotiation of the indicated option*/
+#define TELNET_SB 250
+/** TELNET CODE: Indicates the desire to begin performing, or confirmation that you are now performing, the indicated option*/
+#define TELNET_WILL 251
+/** TELNET CODE: Indicates the refusal to perform, or continue performing, the indicated option*/
+#define TELNET_WONT 252
+/** TELNET CODE: Indicates the request that the other party perform, or confirmation that you are expecting the other party to perform, the indicated option*/
+#define TELNET_DO 253
+/** TELNET CODE: 253 doubles as fake ansi telnet code*/
+#define TELNET_ANSI 253
+/** TELNET CODE: Indicates the demand that the other party stop performing, or confirmation that you are no longer expecting the other party to perform, the indicated option.*/
+#define TELNET_DONT 254
+/** TELNET CODE: Indicates that the other party can go ahead and transmit -- I'm done.*/
+#define TELNET_GA 249
+/** TELNET CODE: Indicates that there is nothing to do?*/
+#define TELNET_NOP 241
+/** TELNET CODE: IAC*/
+#define TELNET_IAC 255
 
 WiFiClient tcpClient;
 WiFiServer tcpServer(tcpServerPort);
@@ -1476,14 +1531,56 @@ void loop()
           Serial.print(rxByte); Serial.flush();
 #endif
           // We are asked to do some option, respond we won't
-          if (cmdByte1 == DO)
-          {
-            tcpClient.write((uint8_t)255); tcpClient.write((uint8_t)WONT); tcpClient.write(cmdByte2);
+          if (cmdByte1 == TELNET_DO) {
+            if (cmdByte2 == TELNET_TERMTYPE or cmdByte2 == TELNET_NAWS) {
+              // Will send the terminal type or window size
+              tcpClient.write(TELNET_IAC);
+              tcpClient.write(TELNET_WILL);
+              tcpClient.write(cmdByte2);
+            }
+            else {
+              tcpClient.write((uint8_t)255);
+              tcpClient.write((uint8_t)TELNET_WONT);
+              tcpClient.write(cmdByte2);
+            }
           }
           // Server wants to do any option, allow it
-          else if (cmdByte1 == WILL)
-          {
-            tcpClient.write((uint8_t)255); tcpClient.write((uint8_t)DO); tcpClient.write(cmdByte2);
+          else if (cmdByte1 == TELNET_WILL) {
+            tcpClient.write((uint8_t)255);
+            tcpClient.write((uint8_t)TELNET_DO);
+            tcpClient.write(cmdByte2);
+          }
+          // Subnegotiation
+          else if (cmdByte1 == TELNET_SB) {
+            if (cmdByte2 == TELNET_TERMTYPE) {
+              // Send the terminal type
+              tcpClient.write(TELNET_IAC);
+              tcpClient.write(TELNET_SB);
+              tcpClient.write(cmdByte2);
+              tcpClient.write((uint8_t)0);
+              tcpClient.write(termType, strlen(termType));
+              tcpClient.write(TELNET_IAC);
+              tcpClient.write(TELNET_SE);
+            }
+            if (cmdByte2 == TELNET_NAWS) {
+              // Send the window size
+              tcpClient.write(TELNET_IAC);
+              tcpClient.write(TELNET_SB);
+              tcpClient.write(cmdByte2);
+              tcpClient.write((uint8_t)(termWidth >> 8));
+              tcpClient.write((uint8_t)(termWidth & 0xFF));
+              tcpClient.write((uint8_t)(termHeight >> 8));
+              tcpClient.write((uint8_t)(termHeight & 0xFF));
+              tcpClient.write(TELNET_IAC);
+              tcpClient.write(TELNET_SE);
+            }
+            else {
+              char lastC = cmdByte1;
+              while (((lastC != TELNET_IAC) || (rxByte != TELNET_SE)) && (rxByte >= 0)) {
+                lastC = rxByte;
+                rxByte = tcpClient.read();
+              }
+            }
           }
         }
 #ifdef DEBUG
